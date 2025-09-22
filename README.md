@@ -9,7 +9,7 @@ Ansible playbook for setting up Freshrss
 ## Running this playbook
 1. Open a terminal and go into the freshrss-playbook directory.
 2. Check vars/keyfile.yml and edit a root db password and a user db password.
-3. Check vars/vars.yml that timezone and other settings looks good.
+3. Check vars/vars.yml that settings looks good.
     - version is taken from [FreshRSS github page](https://github.com/FreshRSS/FreshRSS/tags)
 3. Run: ```ansible-playbook main.yml```
 4. Go to ```https://FreshRSS host IP-address```
