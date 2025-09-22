@@ -1,5 +1,5 @@
 ---
-- name: Configuring freshrss container
+- name: Configuring FreshRSS container
   hosts: freshrss
 
   vars_files:
@@ -72,18 +72,6 @@
         dest: /var/www/{{ http_service }}
         remote_src: yes
         extra_opts: [--strip-components=1]
-      when: restore == false
-
-    - name: Send backup file to container
-      command: /snap/bin/lxc file push "{{ backup_src }}" "{{ container_name }}"/root/ -r
-      when: restore == true
-
-    - name: Unpack FreshRSS into /var/www/
-      ansible.builtin.unarchive:
-        src: /root/{{ backup_date_dir }}/{{ http_service }}-v{{ version }}-{{ backup_date_dir }}.tgz
-        dest: /var/www/{{ http_service }}
-        remote_src: yes
-      when: restore == true
 
     - name: Change owner of the freshrss data folder and subfolders.
       ansible.builtin.file:
@@ -139,20 +127,6 @@
         path: "{{ backup_folder }}"
         state: directory
 
-    - name: Copy backup script to container
-      template:
-        src: "files/backup.sh.j2"
-        dest: "/root/backup.sh"
-
-    - name: Ensure that a backup job for freshrss exists"
-      ansible.builtin.cron:
-        name: "backup freshrss"
-        user: root
-        minute: "0"
-        hour: "5"
-        weekday: "3"
-        job: /root/backup.sh
-
     - name: Ensure feed refresh exist in /etc/crontab
       ansible.builtin.cron:
         name: "refresh feed"
@@ -161,16 +135,6 @@
         hour: "0"
         weekday: "0"
         job: php -f /var/www/freshrss/app/actualize_script.php > /tmp/FreshRSS.log 2>&1
-
-    - name: Register freshrss users to variable
-      command: /var/www/{{ http_service }}/cli/list-users.php
-      register: freshrss_users
-      when: restore == true
-
-    - name: Restore users db
-      command: /var/www/{{ http_service }}/cli/import-sqlite-for-user.php --user "{{ item }}" --filename /root/{{ backup_date_dir }}/"{{ item }}".sqlite
-      with_items: "{{ freshrss_users.stdout_lines }}"
-      when: restore == true
 
     - name: Reboot the server.
       ansible.builtin.reboot:
