@@ -1,0 +1,187 @@
+---
+- name: Configuring freshrss container
+  hosts: freshrss
+
+  vars_files:
+    - vars/vars.yml
+    - vars/keyfile.yml
+
+  tasks:
+    - name: Install dependencies
+      package:
+        name:
+          - ca-certificates
+          - cron
+          - apache2
+          - libapache2-mod-php
+          - libapache2-mod-auth-openidc
+          - mysql-server
+          - php-curl
+          - php-gmp
+          - php-intl
+          - php-mbstring
+          - php-xml
+          - php-zip
+          - php-sqlite3
+          - php-mysql
+          - php-pgsql
+          - curl
+          - python3-pip
+          - python3-pymysql
+          - python3-cryptography
+        state: present
+
+    - name: Change root password for mysql
+      community.mysql.mysql_user:
+        state: present
+        login_password: "{{ root_db_pw }}"
+        name: root
+        password: "{{ root_db_pw }}"
+        login_unix_socket: /run/mysqld/mysqld.sock
+
+    - name: Create a new database with name 'freshrss'
+      community.mysql.mysql_db:
+        name: freshrss
+        login_password: "{{ root_db_pw }}"
+        state: present
+        login_unix_socket: /run/mysqld/mysqld.sock
+
+    - name: Create user with password, all database privileges and 'WITH GRANT OPTION' in freshrss
+      community.mysql.mysql_user:
+        state: present
+        login_password: "{{ root_db_pw }}"
+        name: freshrss
+        password: "{{ db_pw }}"
+        priv:
+          'freshrss.*': 'ALL,GRANT'
+        login_unix_socket: /run/mysqld/mysqld.sock
+
+    - name: Remove the standard apache2 html folder
+      ansible.builtin.file:
+        path: /var/www/html
+        state: absent
+
+    - name: Create folder for freshrss in /var/www/
+      file:
+        path: /var/www/{{ http_service }}
+        state: directory
+
+    - name: Download and unpack FreshRSS into /var/www/
+      ansible.builtin.unarchive:
+        src: https://github.com/FreshRSS/FreshRSS/archive/refs/tags/{{ version }}.tar.gz
+        dest: /var/www/{{ http_service }}
+        remote_src: yes
+        extra_opts: [--strip-components=1]
+      when: restore == false
+
+    - name: Send backup file to container
+      command: /snap/bin/lxc file push "{{ backup_src }}" "{{ container_name }}"/root/ -r
+      when: restore == true
+
+    - name: Unpack FreshRSS into /var/www/
+      ansible.builtin.unarchive:
+        src: /root/{{ backup_date_dir }}/{{ http_service }}-v{{ version }}-{{ backup_date_dir }}.tgz
+        dest: /var/www/{{ http_service }}
+        remote_src: yes
+      when: restore == true
+
+    - name: Change owner of the freshrss data folder and subfolders.
+      ansible.builtin.file:
+        path: /var/www/{{ http_service }}/data/
+        state: directory
+        recurse: yes
+        owner: www-data
+        group: www-data
+
+    - name: Set up Apache virtuahHost
+      template:
+        src: "files/apache.conf.j2"
+        dest: "/etc/apache2/sites-available/{{ http_service }}.conf"
+
+    - name: Enable the Apache2 module ssl
+      community.general.apache2_module:
+        state: present
+        name: ssl
+      notify: Restart Apache
+
+    - name: Generate an OpenSSL private key
+      community.crypto.openssl_privatekey:
+        path: "{{ ssl_priv_key }}"
+        size: 2048
+
+    - name: Generate a Self Signed OpenSSL certificate
+      community.crypto.x509_certificate:
+        path: "{{ ssl_key }}"
+        privatekey_path: "{{ ssl_priv_key }}"
+        provider: selfsigned
+
+    - name: Enable new site
+      shell: /usr/sbin/a2ensite {{ http_service }}.conf
+      notify: Reload Apache
+
+    - name: Disable default Apache site
+      shell: /usr/sbin/a2dissite 000-default.conf
+      notify: Reload Apache
+
+    - name: "UFW - Allow HTTPS on port {{ https_port }}"
+      ufw:
+        rule: allow
+        port: "{{ https_port }}"
+        proto: tcp
+
+    - name: Ensure UFW is started.
+      community.general.ufw:
+        state: enabled
+        default: deny
+
+    - name: Create backup folder
+      ansible.builtin.file:
+        path: "{{ backup_folder }}"
+        state: directory
+
+    - name: Copy backup script to container
+      template:
+        src: "files/backup.sh.j2"
+        dest: "/root/backup.sh"
+
+    - name: Ensure that a backup job for freshrss exists"
+      ansible.builtin.cron:
+        name: "backup freshrss"
+        user: root
+        minute: "0"
+        hour: "5"
+        weekday: "3"
+        job: /root/backup.sh
+
+    - name: Ensure feed refresh exist in /etc/crontab
+      ansible.builtin.cron:
+        name: "refresh feed"
+        user: www-data
+        minute: "10"
+        hour: "0"
+        weekday: "0"
+        job: php -f /var/www/freshrss/app/actualize_script.php > /tmp/FreshRSS.log 2>&1
+
+    - name: Register freshrss users to variable
+      command: /var/www/{{ http_service }}/cli/list-users.php
+      register: freshrss_users
+      when: restore == true
+
+    - name: Restore users db
+      command: /var/www/{{ http_service }}/cli/import-sqlite-for-user.php --user "{{ item }}" --filename /root/{{ backup_date_dir }}/"{{ item }}".sqlite
+      with_items: "{{ freshrss_users.stdout_lines }}"
+      when: restore == true
+
+    - name: Reboot the server.
+      ansible.builtin.reboot:
+
+  handlers:
+    - name: Reload Apache
+      service:
+        name: apache2
+        state: reloaded
+
+    - name: Restart Apache
+      service:
+        name: apache2
+        state: restarted

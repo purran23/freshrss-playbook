@@ -1,0 +1,8 @@
+---
+container_name: freshrss # Needs to be the same name as in inventory and the playbook.
+container_image: ubuntu/noble/amd64
+container_profile: default
+timezone: Europe/Stockholm
+http_service: freshrss # name of the freshrss folder in /var/www
+https_port: "443"
+version: "1.27.0"
